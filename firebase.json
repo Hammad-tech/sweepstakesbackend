@@ -1,0 +1,13 @@
+{
+  "type": "service_account",
+  "project_id": "sweep-stakes-45239",
+  "private_key_id": "c8a592146a380996fb4d16ca87f6dae4a82c1ef2",
+  "private_key": "-----BEGIN PRIVATE KEY-----\nMIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQCyoeXUT2KCI1MG\n/UfrxMq93M0TeBOokJj8pNESEQD71A079h1sIuOmPOWIVn8RouHfCFhVOy2w6T7w\nUt6rFrlrTgdgL1M03mgEfV5at6p83rsdOc5kyBKXqfR6uZzUXPsS+LDCT48yRXnd\nV60PrFWVW+Gs15iyQGY5KWH+ZhOAODB47GLi4yhhDwX/vzUZGrq31hap5OZ6NNW4\nKFNg6/yLzdMoWjUQryJXQY8pDWkjQKtq9+uK/FeptK4dEwcuB/luYFMnqH/gvcMc\n+plqjyRwHQAezucvdtOFoMfdJDdvLRBi8AwplqRzk2iv4UikOdjMJYZ+u03EuGpQ\nFRPqP0p1AgMBAAECggEAEUpRbDD46H7R0QngFcaZFzKRmRJU2MqSPFYZtIV30mhO\nlaC3bVmdLmCTmRRCPWtGMKfmoO1W+VpCUNG8otPSw7usRBeglqv2ZoTaBq7jbi3C\n78vCGggxoIN/WgewUe/kD4yJ020O/78w0gdkBXHZYNkhaXD+4zYPjvXd+dlYht7/\nrX5XX0bfDAd+10sZdcMNtFZbbOB3GjFRTBs3A7ABjXukvyiMi54GmeyEIV7LAihw\ntDrE1U0t1Hh2Xqu3toY8qLCV4igDSWusM/LFpfeMQ9uPzTvJ4mww95iGvs9hyVBU\n16C5ZTfanEdui69qMfnF35lCAHXAZGdRFn7wG/eSiwKBgQD1GK5EQV2hFOvyl00b\n14jwyelAcooWfxAfWrFuqeSjCOpWoFFvf08yN/aHjsNzzMbl+psnYWLWlglkb8AW\nugq8FH5cpXIvlPu1KdDBkUeJBpyTnxAjti3k8d57omFmSM5O5gygZF4IqP1oZLWW\no3TOW/gTrxWW31+lB/mkooPALwKBgQC6lEgDKep8oI+EslH8KjPhj/knr6QZqkr4\nc5lu+r7mhDuOA34J8eJHqDJuLDhjWdj1AxlO545cTmVWLp83obwtjfkGCTpuqq13\nwlVX47lcrp5m8CdnEc7we4Z52+DWkeUI9d+v5OQHWwoc+3LO0mGmPR8eMgaTUMly\nGEOGPytymwKBgQCuTToJgm7ikm1l3WHR7gsOKpl94rb/XqeJlMbgS2Q06a81odeo\nMmKQ9SmWp9mp7bR5cyqJ7AENWDAfxDVYNEBUF0LyAhrdaddDtBQoxHeaJCCP/yvM\nKdAjpDqzs/wOcLJ/e6z5F8ej4wIsDorxMRdtdgxLe1UgMYTkaXKJOaX2swKBgFnv\nO776p2KnakaGReqM1TE22tx8V1dftH+KCT1rdDVdK+/KUyisBWyQ8K4Wdp+9IU0I\nz1wvVXm8+C/QjUKdnT1AH/b+38GUV8VQUR7qT+ES8pufyv5toRheEnYOvJPxAzuM\neOQqKpg5E+jgc3iqBBPDhophhrXfzRpIA9RkAqddAoGANyIRs6BHBKNzFPoZMIEW\nTv7LhrMO9wsgpcQmhgIFpejdm51XViTiTIT7DC7ulJVWzEtsw5NjVz82rC8ad46a\nI9oTAoYUfKZSU/WG9yfhQ5gYeHDIOyyhelVBsiV1gTRcyvhwX7yPo1z/FYFn4hB4\nDNjtjZP/f+BR4HGDPnKbcWA=\n-----END PRIVATE KEY-----\n",
+  "client_email": "firebase-adminsdk-smo1v@sweep-stakes-45239.iam.gserviceaccount.com",
+  "client_id": "107128976074925475593",
+  "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+  "token_uri": "https://oauth2.googleapis.com/token",
+  "auth_provider_x509_cert_url": "https://www.googleapis.com/oauth2/v1/certs",
+  "client_x509_cert_url": "https://www.googleapis.com/robot/v1/metadata/x509/firebase-adminsdk-smo1v%40sweep-stakes-45239.iam.gserviceaccount.com",
+  "universe_domain": "googleapis.com"
+}
