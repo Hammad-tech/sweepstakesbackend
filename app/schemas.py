@@ -130,17 +130,22 @@ class RegisterUser(BaseModel):
 class BuyShareRequest(BaseModel):
     user_id: str
     event_id: int
-    outcome: int
+    outcome: str  # "yes" or "no"
+    bet_type: str  # "buy" or "sell"
     shareCount: int
-    share_price: float
+    share_price: float  # Current price of the share
+    limit_price: Optional[float] = None  # Limit price (optional)
+
 
 
 class SellShareRequest(BaseModel):
     user_id: str
-    eventId: int
-    outcome: int
+    event_id: int
+    outcome: str  # "yes" or "no"
+    bet_type: str  # "buy" or "sell"
     shareCount: int
-    share_price: float
+    share_price: float  # Current price of the share
+    limit_price: Optional[float] = None  # Limit price (optional)
 
 
 class UserProfile(BaseModel):

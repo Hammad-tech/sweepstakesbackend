@@ -4,10 +4,10 @@ from fastapi.responses import JSONResponse
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 
 import uvicorn
-
 # SQLAlchemy Imports for Database Models
 from sqlalchemy import func
 from sqlalchemy.orm import Session
+from sqlalchemy.exc import IntegrityError
 
 # Firebase Admin Imports for Authentication
 import firebase_admin
@@ -46,13 +46,12 @@ from .schemas import (
     UserProfileEdit,
     ChangePasswordRequest,
 )  # Assuming these are your Pydantic schemas
-from .scraping import (
-    scrape_and_store_matches,
-)  # Assuming the scraping function is in a separate file like `scraping.py`
+from .helper import scrape_and_store_matches
 
 from .config import add_cors_middleware, start_scheduler
 from .firebase import initialize_firebase
 
+spread_value=2
 # Create the tables
 Base.metadata.create_all(bind=engine)
 
@@ -111,7 +110,7 @@ def get_event_by_id(event_id: int, db: Session = Depends(get_db)):
 
     # Query the associated match for this event
     db_match = db.query(Match).filter(Match.id == db_event.match_id).first()
-
+    
     # If no match is found, raise an error
     if not db_match:
         raise HTTPException(
@@ -136,6 +135,8 @@ def get_event_by_id(event_id: int, db: Session = Depends(get_db)):
     elif no_percentage == 0:
         yes_percentage = 99
         no_percentage = 1
+    
+
 
     # Create a new variation entry with the current timestamp and percentages
     new_variation = {
@@ -155,8 +156,8 @@ def get_event_by_id(event_id: int, db: Session = Depends(get_db)):
         "id": db_event.id,
         "match_id": db_event.match_id,
         "question": db_event.question,
-        "total_yes_bets": db_event.total_yes_bets,
-        "total_no_bets": db_event.total_no_bets,
+        "total_yes_bets": total_yes_bets+spread_value,
+        "total_no_bets": total_no_bets+spread_value,
         "variations": db_event.variations,
         "match": {
             "id": db_match.id,
@@ -444,126 +445,284 @@ async def login(token: HTTPAuthorizationCredentials = Depends(security)):
         raise HTTPException(status_code=403, detail=f"Forbidden: {str(e)}")
 
 
-# API to buy shares
 @app.post("/api/market/buy-share")
 async def buy_share(request: BuyShareRequest, db: Session = Depends(get_db)):
-
+    # Fetch user
     user = db.query(User).filter(User.id == request.user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
 
-    if request.outcome not in [0, 1]:
-        raise HTTPException(status_code=400, detail="Invalid outcome. Must be 1 or 0.")
-
-    # Check the user's balance
-    total_cost = (request.share_price / 100) * request.shareCount
-    if user.sweeps_points < total_cost:
+    # Validate bet_type and outcome
+    if request.bet_type not in ["buy", "sell"]:
         raise HTTPException(
-            status_code=400, detail="Insufficient Sweeps Points balance."
+            status_code=400, detail="Invalid bet type. Must be 'buy' or 'sell'."
+        )
+    if request.outcome not in ["yes", "no"]:
+        raise HTTPException(
+            status_code=400, detail="Invalid outcome. Must be 'yes' or 'no'."
         )
 
-    # Deduct the cost from the user's balance
-    user.sweeps_points -= total_cost
+    # Fetch event
+    event = db.query(Event).filter(Event.id == request.event_id).first()
+    if not event:
+        raise HTTPException(status_code=404, detail="Event not found")
 
-    # Determine the bet type based on the outcome
-    bet_type = "yes" if request.outcome == 1 else "no"
-    # Create a new share record
-    new_share = Share(
-        user_id=user.id,
-        event_id=request.event_id,
-        amount=request.shareCount,
-        bet_type=bet_type,
-    )
-    db.add(new_share)
-
-    # Update the total yes or no bets based on the outcome
-    if bet_type == "yes":
-        event = db.query(Event).filter(Event.id == request.event_id).first()
-        if event:
-            event.total_yes_bets += request.shareCount
-    else:
-        event = db.query(Event).filter(Event.id == request.event_id).first()
-        if event:
-            event.total_no_bets += request.shareCount
-
-    db.commit()
-
-    return {"message": "Shares purchased successfully", "cost": total_cost}
-
-
-# API to sell shares
-@app.post("/api/market/sell-share")
-async def sell_share(request: SellShareRequest, db: Session = Depends(get_db)):
-    user = db.query(User).filter(User.id == request.user_id).first()
-
-    if request.outcome not in [1, 0]:
-        raise HTTPException(status_code=400, detail="Invalid outcome. Must be 1 or 0.")
-
-    bet_type = "yes" if request.outcome == 1 else "no"
-
-    # Retrieve shares held by the user
-    shares = (
+    # Fetch existing shares for the event
+    existing_shares = (
         db.query(Share)
-        .filter(
-            Share.user_id == user.id,
-            Share.event_id == request.eventId,
-            Share.bet_type == bet_type,
-        )
+        .filter(Share.user_id == user.id, Share.event_id == request.event_id)
         .all()
     )
-    total_shares = sum(share.amount for share in shares)
 
-    if request.shareCount > total_shares:
-        raise HTTPException(status_code=400, detail="Insufficient shares to sell.")
+    # Check for conflicting outcomes
+    for share in existing_shares:
+        if share.outcome != request.outcome:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Conflicting outcome detected. Existing position is {share.outcome}.",
+            )
 
-    # Credit the user's balance
-    total_credits = request.share_price * request.shareCount
-    user.sweeps_points += total_credits
+    # Resolve opposing positions (e.g., sell existing buy positions)
+    opposing_shares = [
+        share
+        for share in existing_shares
+        if share.bet_type != request.bet_type and share.amount > 0
+    ]
+    remaining_shares = request.shareCount
+    total_profit_or_loss = 0  # Track profit/loss for opposing trades
 
-    # Remove shares from the database
-    # This is a simplistic way; you might want to adjust counts instead of deleting
-    for share in shares:
-        if share.amount >= request.shareCount:
-            share.amount -= request.shareCount
-            if share.amount == 0:
-                db.delete(share)
-            else:
-                db.add(share)
+    for share in opposing_shares:
+        trade_price = request.share_price  # Use the current share price for profit/loss calculation
+        if share.amount >= remaining_shares:
+            # Close partially or fully opposing position
+            trade_amount = remaining_shares
+            total_profit_or_loss += trade_amount * (request.share_price / 100 - share.share_price / 100)
+            share.amount -= remaining_shares
+            remaining_shares = 0
+            db.add(share)
+            break
+        else:
+            # Fully close the opposing position
+            trade_amount = share.amount
+            total_profit_or_loss += trade_amount * (request.share_price / 100 - share.share_price / 100)
+            remaining_shares -= trade_amount
+            db.delete(share)
 
-    # Update the match's total bets
-    if bet_type == "yes":
-        event = db.query(Event).filter(Event.id == request.eventId).first()
-        if event:
+    # Update user's balance based on profit/loss from opposing trades
+    user.sweeps_points += total_profit_or_loss
+
+    # Handle remaining shares (opening or updating position)
+    if remaining_shares > 0:
+        existing_position = next(
+            (
+                share
+                for share in existing_shares
+                if share.bet_type == request.bet_type and share.outcome == request.outcome
+            ),
+            None,
+        )
+
+        if existing_position:
+            # Update the existing position
+            existing_position.amount += remaining_shares
+            # Update the limit price if provided
+            if request.limit_price:
+                existing_position.limit_price = request.limit_price
+            db.add(existing_position)
+        else:
+            # Create a new position
+            new_share = Share(
+                user_id=user.id,
+                event_id=request.event_id,
+                amount=remaining_shares,
+                bet_type=request.bet_type,
+                outcome=request.outcome,
+                share_price=request.share_price,  # Store the current share price
+                limit_price=request.limit_price,  # Save limit price if provided
+            )
+            db.add(new_share)
+
+        # Deduct cost from user's balance for new buy positions
+        if request.bet_type == "buy":
+            total_cost = (request.share_price / 100) * remaining_shares
+            if user.sweeps_points < total_cost:
+                raise HTTPException(
+                    status_code=400, detail="Insufficient balance for the trade."
+                )
+            user.sweeps_points -= total_cost
+
+    # Update event totals
+    if request.outcome == "yes":
+        if request.bet_type == "buy":
+            event.total_yes_bets += request.shareCount
+        else:
             event.total_yes_bets -= request.shareCount
-    else:
-        event = db.query(Event).filter(Event.id == request.eventId).first()
-        if event:
+    elif request.outcome == "no":
+        if request.bet_type == "buy":
+            event.total_no_bets += request.shareCount
+        else:
             event.total_no_bets -= request.shareCount
 
+    # Commit transaction
     db.commit()
+    return {
+        "message": "Trade executed successfully",
+        "profit_or_loss": round(total_profit_or_loss, 2),
+    }
 
-    return {"message": "Shares sold successfully", "credits": total_credits}
+
+@app.post("/api/market/sell-share")
+async def sell_share(request: SellShareRequest, db: Session = Depends(get_db)):
+    # Fetch user
+    user = db.query(User).filter(User.id == request.user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    # Validate bet_type and outcome
+    if request.bet_type != "sell":
+        raise HTTPException(
+            status_code=400, detail="Invalid bet type for selling. Must be 'sell'."
+        )
+    if request.outcome not in ["yes", "no"]:
+        raise HTTPException(
+            status_code=400, detail="Invalid outcome. Must be 'yes' or 'no'."
+        )
+
+    # Fetch event
+    event = db.query(Event).filter(Event.id == request.event_id).first()
+    if not event:
+        raise HTTPException(status_code=404, detail="Event not found")
+
+    # Fetch existing shares for the event
+    existing_shares = (
+        db.query(Share)
+        .filter(Share.user_id == user.id, Share.event_id == request.event_id)
+        .all()
+    )
+
+    # Check for conflicting outcomes
+    for share in existing_shares:
+        if share.outcome != request.outcome:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Conflicting outcome detected. Existing position is {share.outcome}.",
+            )
+
+    # Resolve opposing positions (e.g., buy existing sell positions)
+    opposing_shares = [
+        share
+        for share in existing_shares
+        if share.bet_type == "buy" and share.amount > 0
+    ]
+    remaining_shares = request.shareCount
+    total_profit_or_loss = 0  # Track profit/loss for opposing trades
+
+    for share in opposing_shares:
+        trade_price = request.share_price  # Use the current share price for profit/loss calculation
+        if share.amount >= remaining_shares:
+            # Close partially or fully opposing position
+            trade_amount = remaining_shares
+            total_profit_or_loss += trade_amount * (share.share_price / 100 - request.share_price / 100)
+            share.amount -= remaining_shares
+            remaining_shares = 0
+            db.add(share)
+            break
+        else:
+            # Fully close the opposing position
+            trade_amount = share.amount
+            total_profit_or_loss += trade_amount * (share.share_price / 100 - request.share_price / 100)
+            remaining_shares -= trade_amount
+            db.delete(share)
+
+    # Update user's balance based on profit/loss from opposing trades
+    user.sweeps_points += total_profit_or_loss
+
+    # Handle remaining shares (opening or updating position)
+    if remaining_shares > 0:
+        existing_position = next(
+            (
+                share
+                for share in existing_shares
+                if share.bet_type == "sell" and share.outcome == request.outcome
+            ),
+            None,
+        )
+
+        if existing_position:
+            # Update the existing position
+            existing_position.amount += remaining_shares
+            # Update the limit price if provided
+            if request.limit_price:
+                existing_position.limit_price = request.limit_price
+            db.add(existing_position)
+        else:
+            # Create a new position
+            new_share = Share(
+                user_id=user.id,
+                event_id=request.event_id,
+                amount=remaining_shares,
+                bet_type="sell",
+                outcome=request.outcome,
+                share_price=request.share_price,  # Store the current share price
+                limit_price=request.limit_price,  # Save limit price if provided
+            )
+            db.add(new_share)
+
+    # Update event totals
+    if request.outcome == "yes":
+        event.total_yes_bets -= request.shareCount
+    elif request.outcome == "no":
+        event.total_no_bets -= request.shareCount
+
+    # Commit transaction
+    db.commit()
+    return {
+        "message": "Trade executed successfully",
+        "profit_or_loss": round(total_profit_or_loss, 2),
+    }
 
 
 @app.get("/api/market/share-price")
-async def get_share_price(eventId: int, db: Session = Depends(get_db)):
+async def get_share_price(eventId: int, type: str, db: Session = Depends(get_db)):
+    # Validate the type parameter
+    if type not in ["buy", "sell"]:
+        raise HTTPException(status_code=400, detail="Invalid type. Must be 'buy' or 'sell'.")
+
     # Retrieve the match details for the given event ID
-    match = db.query(Match).filter(Match.id == eventId).first()
+    match = db.query(Event).filter(Event.id == eventId).first()
     if not match:
         raise HTTPException(status_code=404, detail="Event not found.")
 
     # Calculate the total shares bought for both outcomes
     total_shares = match.total_yes_bets + match.total_no_bets
 
+    # Set a fixed spread value
+    spread_value = 2  # Fixed spread value
+
     # Avoid division by zero if there are no shares bought yet
     if total_shares == 0:
-        yes_price = 50  # Set a base price of 50 cents when no shares have been bought
+        yes_price = 50  # Set a base price of 50 when no shares have been bought
         no_price = 50
     else:
         # Calculate share price as a percentage of total shares bought for each outcome
         yes_price = (match.total_yes_bets / total_shares) * 100
         no_price = (match.total_no_bets / total_shares) * 100
 
+    # Adjust prices based on the type (buy or sell)
+    if type == "buy":
+        yes_price += spread_value
+        no_price += spread_value
+    elif type == "sell":
+        yes_price -= spread_value
+        no_price -= spread_value
+
+    # Ensure prices don't go below 0
+    yes_price = max(0, yes_price)
+    no_price = max(0, no_price)
+
     return {
         "eventId": eventId,
+        "type": type,
         "yes_price": round(yes_price, 2),
         "no_price": round(no_price, 2),
     }

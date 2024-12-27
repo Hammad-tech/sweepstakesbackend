@@ -83,22 +83,21 @@ class Match(Base):
 
 
 class Share(Base):
-
     __tablename__ = "shares"
 
     id = Column(Integer, primary_key=True, index=True)
     user_id = Column(String, ForeignKey("users.id"))
-    event_id = Column(
-        Integer, ForeignKey("events.id"), nullable=False
-    )  # Foreign key to Event table
-    amount = Column(Float)  # Amount of the share
-    bet_type = Column(String)  # "yes" or "no"
+    event_id = Column(Integer, ForeignKey("events.id"), nullable=False)
+    amount = Column(Float)  # Number of shares
+    bet_type = Column(String)  # "buy" or "sell"
+    outcome = Column(String)  # "yes" or "no"
+    share_price = Column(Float, nullable=False)  # Price at which shares were bought/sold
+    limit_price = Column(Float, nullable=True)  # Limit price for the trade
     created_at = Column(DateTime, server_default=func.now(), nullable=False)
 
     user = relationship("User", back_populates="shares")
-    event = relationship(
-        "Event", back_populates="shares"
-    )  # Updated to back-populate from Share to Event
+    event = relationship("Event", back_populates="shares")
+
 
 
 # Define the Remarks model
@@ -139,10 +138,10 @@ class User(Base):
     created_at = Column(DateTime, server_default=func.now(), nullable=False)
     role = Column(String, nullable=False, default=UserRole.USER.value)
     sweeps_points = Column(
-        Float, default=1000.0
+        Float, default=5000.0
     )  # Default starting balance of Sweeps Points
     betting_points = Column(
-        Float, default=1000.0
+        Float, default=5000.0
     )  # Default starting balance of Betting Points
     ban = Column(Boolean, default=False)
     first_name = Column(String, nullable=True)  # User's first name
