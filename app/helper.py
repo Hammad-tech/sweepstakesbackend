@@ -21,7 +21,6 @@ from datetime import timedelta
 from fastapi import HTTPException
 
 
-
 def scrape_and_store_matches(db: Session):
     chrome_options = Options()
     chrome_options.add_argument("--headless")  # Run in headless mode
@@ -211,6 +210,7 @@ def scrape_and_store_matches(db: Session):
 
     return {"message": f"{len(matches_list)} matches scraped and stored successfully!"}
 
+
 def calculate_share_price(event_id: int, bet_type: str, db: Session):
     """
     Calculate the share price for a given event and bet type.
@@ -225,7 +225,9 @@ def calculate_share_price(event_id: int, bet_type: str, db: Session):
     """
     # Validate the bet type parameter
     if bet_type not in ["buy", "sell"]:
-        raise HTTPException(status_code=400, detail="Invalid bet type. Must be 'buy' or 'sell'.")
+        raise HTTPException(
+            status_code=400, detail="Invalid bet type. Must be 'buy' or 'sell'."
+        )
 
     # Retrieve the event details
     event = db.query(Event).filter(Event.id == event_id).first()
@@ -266,6 +268,7 @@ def calculate_share_price(event_id: int, bet_type: str, db: Session):
         "no_price": round(no_price, 2),
     }
 
+
 # Helper function: Calculate similarity
 def string_similarity(a, b):
     """
@@ -273,6 +276,7 @@ def string_similarity(a, b):
     Returns a float between 0 and 1.
     """
     return SequenceMatcher(None, a.lower(), b.lower()).ratio()
+
 
 # Helper function: Find best match using similarity
 def find_best_match(team_name, candidates):
@@ -289,6 +293,7 @@ def find_best_match(team_name, candidates):
             best_score = score
     return best_match, best_score
 
+
 # Main function: Get match score
 def get_match_score(team1, team2):
     """
@@ -298,21 +303,21 @@ def get_match_score(team1, team2):
     # Load API key and CSE ID from environment variables
     api_key = os.getenv("GOOGLE_API_KEY")  # Set this in your environment
     cse_id = os.getenv("CSE_ID")  # Set this in your environment
-    
+
     if not api_key or not cse_id:
         return "Error: Missing API credentials."
-    
+
     # Construct Google Custom Search query
-    query = f'{team1} vs {team2} site:sofascore.com'
-    url = f'https://www.googleapis.com/customsearch/v1?q={query}&cx={cse_id}&key={api_key}'
-    
+    query = f"{team1} vs {team2} site:sofascore.com"
+    url = f"https://www.googleapis.com/customsearch/v1?q={query}&cx={cse_id}&key={api_key}"
+
     # Send request to Google API
     response = requests.get(url)
     if response.status_code == 200:
         results = response.json()
-        if 'items' in results:
+        if "items" in results:
             # Get the first match URL
-            match_url = results['items'][0]['link']
+            match_url = results["items"][0]["link"]
             return scrape_match_score(match_url, team1, team2)
         else:
             return "Error: No results found for this match."
@@ -320,6 +325,7 @@ def get_match_score(team1, team2):
         return "Error: API quota exceeded or invalid API key."
     else:
         return f"Error: HTTP {response.status_code}"
+
 
 # Helper function: Scrape match score
 def scrape_match_score(match_url, team1, team2):
@@ -329,43 +335,45 @@ def scrape_match_score(match_url, team1, team2):
     response = requests.get(match_url)
     if response.status_code != 200:
         return "Error: Unable to fetch match page."
-    
+
     # Parse the match page
-    soup = BeautifulSoup(response.text, 'html.parser')
-    left_team = soup.find('div', {'data-testid': 'left_team'})
-    right_team = soup.find('div', {'data-testid': 'right_team'})
-    
+    soup = BeautifulSoup(response.text, "html.parser")
+    left_team = soup.find("div", {"data-testid": "left_team"})
+    right_team = soup.find("div", {"data-testid": "right_team"})
+
     if left_team and right_team:
         # Extract team names
-        left_team_name = left_team.find('bdi').text.strip()
-        right_team_name = right_team.find('bdi').text.strip()
-        
+        left_team_name = left_team.find("bdi").text.strip()
+        right_team_name = right_team.find("bdi").text.strip()
+
         # Extract scores
-        left_team_score = soup.find('span', {'data-testid': 'left_score'}).text.strip()
-        right_team_score = soup.find('span', {'data-testid': 'right_score'}).text.strip()
-        
+        left_team_score = soup.find("span", {"data-testid": "left_score"}).text.strip()
+        right_team_score = soup.find(
+            "span", {"data-testid": "right_score"}
+        ).text.strip()
+
         try:
             left_team_score = int(left_team_score)
             right_team_score = int(right_team_score)
         except ValueError:
             return "Error: Unable to parse scores as integers."
-        
+
         # Match team names using similarity
         teams = [left_team_name, right_team_name]
         match1, score1 = find_best_match(team1, teams)
         match2, score2 = find_best_match(team2, teams)
-        
+
         # Determine the winner
         if match1 == left_team_name:
             match_team1_score = left_team_score
         else:
             match_team1_score = right_team_score
-        
+
         if match2 == right_team_name:
             match_team2_score = right_team_score
         else:
             match_team2_score = left_team_score
-        
+
         if match_team1_score > match_team2_score:
             return 1  # Team1 wins
         elif match_team2_score > match_team1_score:
@@ -381,23 +389,25 @@ def calculate_results_for_event(event_id: int, db: Session):
     event = db.query(Event).filter(Event.id == event_id).first()
     if not event:
         raise ValueError(f"Event with ID {event_id} not found.")
-    
+
     # Fetch the match associated with the event
     match = db.query(Match).filter(Match.id == event.match_id).first()
     if not match:
         raise ValueError(f"Match associated with event ID {event_id} not found.")
-    
+
     # Check if the match start time is at least 3 hours before
     if func.now() < match.match_time + timedelta(hours=3):
         raise ValueError("Results cannot be calculated as the match has not ended.")
-    
+
     # Determine the winner
     match_result = get_match_score(match.team1, match.team2)
     if match_result not in [1, -1, 0]:
         raise ValueError("Invalid result from get_match_score function.")
-    
+
     # 1 = Team 1 wins, -1 = Team 2 wins, 0 = Draw
-    winning_outcome = "yes" if match_result == 1 else "no" if match_result == -1 else "draw"
+    winning_outcome = (
+        "yes" if match_result == 1 else "no" if match_result == -1 else "draw"
+    )
 
     # Fetch all shares for the event
     shares = db.query(Share).filter(Share.event_id == event_id).all()
@@ -411,7 +421,7 @@ def calculate_results_for_event(event_id: int, db: Session):
         user = db.query(User).filter(User.id == share.user_id).first()
         if not user:
             continue
-        
+
         if share.outcome == winning_outcome:
             # Winning bet
             if share.bet_type == "buy":
@@ -428,11 +438,10 @@ def calculate_results_for_event(event_id: int, db: Session):
             elif share.bet_type == "sell":
                 loss = share.amount * (100 - share.share_price) / 100
                 user.sweeps_points -= loss
-        
+
         # Remove resolved shares
         db.delete(share)
 
     # Commit changes
     db.commit()
     return {"message": "Results calculated successfully for the event."}
-

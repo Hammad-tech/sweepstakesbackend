@@ -23,6 +23,7 @@ from .auth import (
 )  # Ensure hash and verify are imported correctly
 from .db_config import Base
 
+
 class UserRole(str, PyEnum):
     ADMIN = "admin"
     USER = "user"
@@ -91,13 +92,14 @@ class Share(Base):
     amount = Column(Float)  # Number of shares
     bet_type = Column(String)  # "buy" or "sell"
     outcome = Column(String)  # "yes" or "no"
-    share_price = Column(Float, nullable=False)  # Price at which shares were bought/sold
+    share_price = Column(
+        Float, nullable=False
+    )  # Price at which shares were bought/sold
     limit_price = Column(Float, nullable=True)  # Limit price for the trade
     created_at = Column(DateTime, server_default=func.now(), nullable=False)
 
     user = relationship("User", back_populates="shares")
     event = relationship("Event", back_populates="shares")
-
 
 
 # Define the Remarks model
@@ -127,7 +129,6 @@ class Remarks(Base):
 
 
 class User(Base):
-
 
     __tablename__ = "users"
 

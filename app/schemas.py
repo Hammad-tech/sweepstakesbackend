@@ -137,7 +137,6 @@ class BuyShareRequest(BaseModel):
     limit_price: Optional[float] = None  # Limit price (optional)
 
 
-
 class SellShareRequest(BaseModel):
     user_id: str
     event_id: int

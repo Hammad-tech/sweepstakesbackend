@@ -4,10 +4,10 @@ from fastapi.responses import JSONResponse
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 
 import uvicorn
+
 # SQLAlchemy Imports for Database Models
 from sqlalchemy import func
 from sqlalchemy.orm import Session
-from sqlalchemy.exc import IntegrityError
 
 # Firebase Admin Imports for Authentication
 import firebase_admin
@@ -15,8 +15,6 @@ from firebase_admin import auth
 
 # Pydantic Models
 from typing import List
-
-import json
 
 
 # Custom Imports (e.g., utilities, helper functions)
@@ -38,7 +36,6 @@ from .schemas import (
     UserOut,
     EventResponse,
     CreateRemark,
-    MatchBetUpdate,
     RegisterUser,
     BuyShareRequest,
     SellShareRequest,
@@ -51,17 +48,18 @@ from .helper import scrape_and_store_matches
 from .config import add_cors_middleware, start_scheduler
 from .firebase import initialize_firebase
 
-spread_value=2
+spread_value = 2
 # Create the tables
 Base.metadata.create_all(bind=engine)
 
 app = FastAPI()
 add_cors_middleware(app)
 
+
 @app.on_event("startup")
 async def startup_event():
     initialize_firebase()  # Initialize Firebase
-    start_scheduler()      # Start scheduling tasks (like scraping)
+    start_scheduler()  # Start scheduling tasks (like scraping)
 
 
 @app.get("/api/scrape_and_store_matches")
@@ -110,7 +108,7 @@ def get_event_by_id(event_id: int, db: Session = Depends(get_db)):
 
     # Query the associated match for this event
     db_match = db.query(Match).filter(Match.id == db_event.match_id).first()
-    
+
     # If no match is found, raise an error
     if not db_match:
         raise HTTPException(
@@ -135,8 +133,6 @@ def get_event_by_id(event_id: int, db: Session = Depends(get_db)):
     elif no_percentage == 0:
         yes_percentage = 99
         no_percentage = 1
-    
-
 
     # Create a new variation entry with the current timestamp and percentages
     new_variation = {
@@ -156,8 +152,8 @@ def get_event_by_id(event_id: int, db: Session = Depends(get_db)):
         "id": db_event.id,
         "match_id": db_event.match_id,
         "question": db_event.question,
-        "total_yes_bets": total_yes_bets+spread_value,
-        "total_no_bets": total_no_bets+spread_value,
+        "total_yes_bets": total_yes_bets + spread_value,
+        "total_no_bets": total_no_bets + spread_value,
         "variations": db_event.variations,
         "match": {
             "id": db_match.id,
@@ -274,56 +270,6 @@ def ban_unban_user(user_id: str, message: str, db: Session = Depends(get_db)):
         "user_id": user_id,
         "ban_status": user.ban,
     }
-
-
-@app.post("/update-bets/")
-def update_bets(match_list: List[MatchBetUpdate], db: Session = Depends(get_db)):
-    for match in match_list:
-        # Get the match by ID (use ORM model for querying)
-        db_match = db.query(Match).filter(Match.id == match.id).first()
-
-        if not db_match:
-            raise HTTPException(
-                status_code=404, detail=f"Match with ID {match.id} not found"
-            )
-
-        # Update yes or no bet count based on the 'bet' field
-        if match.bet == 1:
-            db_match.total_yes_bets += 1
-            # Create a new 'yes' bet with timestamp
-            new_bet = Bet(match_id=db_match.id, bet_type="yes", timestamp=func.now())
-            db.add(new_bet)  # Add the new 'yes' bet to the database
-        elif match.bet == 0:
-            db_match.total_no_bets += 1
-            # Create a new 'no' bet with timestamp
-            new_bet = Bet(match_id=db_match.id, bet_type="no", timestamp=func.now())
-            db.add(new_bet)  # Add the new 'no' bet to the database
-        else:
-            raise HTTPException(
-                status_code=400, detail="Invalid bet value. Use 0 for no and 1 for yes."
-            )
-
-        # Commit changes to the database
-        db.commit()
-        db.refresh(db_match)
-
-    return {"message": "Bet counts and timestamps updated successfully"}
-
-
-def load_data_from_file():
-    try:
-        with open("test.json", "r") as f:
-            data = json.load(f)
-        return data
-    except Exception as e:
-        return {"error": str(e)}
-
-
-@app.get("/bettors")
-async def get_bettors():
-    """Return the JSON data read from the file."""
-    data = load_data_from_file()
-    return JSONResponse(content=data)
 
 
 @app.get("/users/", response_model=List[UserOut])  # Define the response model
@@ -492,11 +438,15 @@ async def buy_share(request: BuyShareRequest, db: Session = Depends(get_db)):
     total_profit_or_loss = 0  # Track profit/loss for opposing trades
 
     for share in opposing_shares:
-        trade_price = request.share_price  # Use the current share price for profit/loss calculation
+        trade_price = (
+            request.share_price
+        )  # Use the current share price for profit/loss calculation
         if share.amount >= remaining_shares:
             # Close partially or fully opposing position
             trade_amount = remaining_shares
-            total_profit_or_loss += trade_amount * (request.share_price / 100 - share.share_price / 100)
+            total_profit_or_loss += trade_amount * (
+                request.share_price / 100 - share.share_price / 100
+            )
             share.amount -= remaining_shares
             remaining_shares = 0
             db.add(share)
@@ -504,7 +454,9 @@ async def buy_share(request: BuyShareRequest, db: Session = Depends(get_db)):
         else:
             # Fully close the opposing position
             trade_amount = share.amount
-            total_profit_or_loss += trade_amount * (request.share_price / 100 - share.share_price / 100)
+            total_profit_or_loss += trade_amount * (
+                request.share_price / 100 - share.share_price / 100
+            )
             remaining_shares -= trade_amount
             db.delete(share)
 
@@ -517,7 +469,8 @@ async def buy_share(request: BuyShareRequest, db: Session = Depends(get_db)):
             (
                 share
                 for share in existing_shares
-                if share.bet_type == request.bet_type and share.outcome == request.outcome
+                if share.bet_type == request.bet_type
+                and share.outcome == request.outcome
             ),
             None,
         )
@@ -618,11 +571,15 @@ async def sell_share(request: SellShareRequest, db: Session = Depends(get_db)):
     total_profit_or_loss = 0  # Track profit/loss for opposing trades
 
     for share in opposing_shares:
-        trade_price = request.share_price  # Use the current share price for profit/loss calculation
+        trade_price = (
+            request.share_price
+        )  # Use the current share price for profit/loss calculation
         if share.amount >= remaining_shares:
             # Close partially or fully opposing position
             trade_amount = remaining_shares
-            total_profit_or_loss += trade_amount * (share.share_price / 100 - request.share_price / 100)
+            total_profit_or_loss += trade_amount * (
+                share.share_price / 100 - request.share_price / 100
+            )
             share.amount -= remaining_shares
             remaining_shares = 0
             db.add(share)
@@ -630,7 +587,9 @@ async def sell_share(request: SellShareRequest, db: Session = Depends(get_db)):
         else:
             # Fully close the opposing position
             trade_amount = share.amount
-            total_profit_or_loss += trade_amount * (share.share_price / 100 - request.share_price / 100)
+            total_profit_or_loss += trade_amount * (
+                share.share_price / 100 - request.share_price / 100
+            )
             remaining_shares -= trade_amount
             db.delete(share)
 
@@ -686,7 +645,9 @@ async def sell_share(request: SellShareRequest, db: Session = Depends(get_db)):
 async def get_share_price(eventId: int, type: str, db: Session = Depends(get_db)):
     # Validate the type parameter
     if type not in ["buy", "sell"]:
-        raise HTTPException(status_code=400, detail="Invalid type. Must be 'buy' or 'sell'.")
+        raise HTTPException(
+            status_code=400, detail="Invalid type. Must be 'buy' or 'sell'."
+        )
 
     # Retrieve the match details for the given event ID
     match = db.query(Event).filter(Event.id == eventId).first()
@@ -726,60 +687,6 @@ async def get_share_price(eventId: int, type: str, db: Session = Depends(get_db)
         "yes_price": round(yes_price, 2),
         "no_price": round(no_price, 2),
     }
-
-
-"""
-@app.get("/api/market/user-shares")
-async def get_user_shares(eventId: int,db: Session = Depends(get_db),token: HTTPAuthorizationCredentials = Depends(security)):
-    # Decode token to get user ID
-    decoded_token = auth.verify_id_token(token.credentials)
-    user_id = decoded_token.get("uid")
-
-    # Retrieve event details
-    match = db.query(Match).filter(Match.id == eventId).first()
-    if not match:
-        raise HTTPException(status_code=404, detail="Event not found.")
-
-    # Calculate the total shares bought for both outcomes to determine current prices
-    total_shares = match.total_yes_bets + match.total_no_bets
-
-    if total_shares == 0:
-        yes_price = 50  # Base price of 50 cents if no shares have been bought
-        no_price = 50
-    else:
-        # Calculate share price in cents based on the proportion of total shares
-        yes_price = (match.total_yes_bets / total_shares) * 100
-        no_price = (match.total_no_bets / total_shares) * 100
-
-    # Retrieve user's shares for the given event
-    user_yes_shares = db.query(Share).filter(
-        Share.user_id == user_id, Share.bet_id == eventId, Share.outcome == "Yes"
-    ).first()
-    user_no_shares = db.query(Share).filter(
-        Share.user_id == user_id, Share.bet_id == eventId, Share.outcome == "No"
-    ).first()
-
-    # Calculate the quantity of shares owned by the user and their market value
-    user_yes_quantity = user_yes_shares.amount if user_yes_shares else 0
-    user_no_quantity = user_no_shares.amount if user_no_shares else 0
-
-    user_yes_value = user_yes_quantity * (yes_price / 100)
-    user_no_value = user_no_quantity * (no_price / 100)
-
-    return {
-        "eventId": eventId,
-        "userShares": {
-            "yes": {
-                "quantity": user_yes_quantity,
-                "market_value": round(user_yes_value, 2)
-            },
-            "no": {
-                "quantity": user_no_quantity,
-                "market_value": round(user_no_value, 2)
-            }
-        }
-    }
-"""
 
 
 @app.patch("/api/admin/user-profile/edit/{userId}")

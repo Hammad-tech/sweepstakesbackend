@@ -11,7 +11,6 @@ Base = declarative_base()
 target_metadata = Base.metadata
 
 
-
 # Dependency to get DB session
 def get_db():
     db = SessionLocal()

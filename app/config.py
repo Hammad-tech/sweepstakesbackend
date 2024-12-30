@@ -7,11 +7,12 @@ from .helper import calculate_results_for_event  # Ensure this is imported corre
 from sqlalchemy.orm import Session
 from datetime import datetime, timedelta
 import logging
-from .models import Match,Event,Share
+from .models import Match, Event, Share
 from .helper import calculate_share_price
 
 
 logging.basicConfig(level=logging.INFO)
+
 
 # FastAPI app configuration
 def add_cors_middleware(app):
@@ -23,20 +24,24 @@ def add_cors_middleware(app):
         allow_headers=["*"],
     )
 
+
 def run_scrape_and_store_matches():
     # Get a session from the DB
     db = next(get_db())
     scrape_and_store_matches(db)
-    
+
 
 def check_and_process_results():
     # Start a new database session
     db: Session = next(get_db())
     try:
         # Fetch events eligible for result calculation
-        eligible_events = db.query(Event).join(Match).filter(
-            Match.match_time <= datetime.utcnow() - timedelta(hours=3)
-        ).all()
+        eligible_events = (
+            db.query(Event)
+            .join(Match)
+            .filter(Match.match_time <= datetime.utcnow() - timedelta(hours=3))
+            .all()
+        )
 
         for event in eligible_events:
             logging.info(f"Processing event ID: {event.id}")
@@ -50,6 +55,7 @@ def check_and_process_results():
 
     finally:
         db.close()
+
 
 def execute_stop_orders():
     """Check for limit conditions and execute stop orders."""
@@ -86,6 +92,7 @@ def execute_stop_orders():
 
     db.commit()
 
+
 def execute_trade(share, market_price, db):
     """Execute the trade based on the share and market price."""
     user = share.user
@@ -106,26 +113,23 @@ def execute_trade(share, market_price, db):
     db.delete(share)
     db.commit()
 
+
 def start_scheduler():
     scheduler = BackgroundScheduler()
-    
+
     # Scraping job
     scheduler.add_job(
-        lambda: run_scrape_and_store_matches(), 
-        "cron", 
-        hour=12, 
-        minute=10
+        lambda: run_scrape_and_store_matches(), "cron", hour=12, minute=10
     )
-    
+
     # Result calculation job
     scheduler.add_job(
         check_and_process_results,
         IntervalTrigger(minutes=30),
         id="result_scheduler",
-        replace_existing=True
+        replace_existing=True,
     )
 
     scheduler.add_job(lambda: execute_stop_orders(), "interval", minutes=10)
 
-    
     scheduler.start()
