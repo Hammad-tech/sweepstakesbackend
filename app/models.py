@@ -35,40 +35,58 @@ class RemarkType(PyEnum):
     subbalance = "subBalance"
     ban = "ban"
 
+class SportType(PyEnum):
+    basketball = "basketball"
+    football = "football"
+    hockey = "hockey"
+
+class MarketType(PyEnum):
+    POINTS = "points"
+    OUTCOME = "outcome"
+
+class EventType(str, PyEnum):
+    MATCH_RESULT = "match_result"  # Which team will win
+    TOTAL_POINTS = "total_points"  # Combined points of both teams
+    TEAM_POINTS = "team_points"  # Points for a specific team
+    OVER_UNDER = "over_under"  # Over/under events for total points
+    HANDICAP = "handicap"
+
 
 class Event(Base):
-
     __tablename__ = "events"
+
     id = Column(Integer, primary_key=True, index=True)
-    match_id = Column(
-        Integer, ForeignKey("matches.id"), nullable=False
-    )  # Foreign key to Match table
-    question = Column(String, default="")
-    total_yes_bets = Column(Integer, default=0)  # Initialize to 0
-    total_no_bets = Column(Integer, default=0)  # Initialize to 0
-    variations = Column(MutableList.as_mutable(JSON), default=[])
+    match_id = Column(Integer, ForeignKey("matches.id"))
+    type = Column(String, nullable=False)  # e.g., MATCH_RESULT, OVER_UNDER
+    heading = Column(String, nullable=False)  # e.g., "Match Result - 100 Indices"
+    question = Column(String, nullable=False)
+    threshold = Column(Float, nullable=True)  # For Over/Under markets
+    buy_sell_index = Column(Float, default=100.0)  # Initial index value
+    buy_price = Column(Float, default=51.0)  # Starting buy price
+    sell_price = Column(Float, default=49.0)  # Starting sell price (2-point spread)
+    variations = Column(JSON, default=[])  # List of buy/sell price changes over time
 
-    shares = relationship(
-        "Share", back_populates="event", cascade="all, delete-orphan"
-    )  # Updated to Share
+    resolved = Column(Boolean, default=False)  # ✅ Ensure this exists
+
     match = relationship("Match", back_populates="events")
-
-    def as_dict(self):
-        return {
-            column.name: getattr(self, column.name) for column in self.__table__.columns
-        }
+    shares = relationship("Share", back_populates="event") 
 
 
-# Database Models
+
 class Match(Base):
     __tablename__ = "matches"
+    
     id = Column(Integer, primary_key=True, index=True)
-    team1 = Column(String)
-    team2 = Column(String)
-    match_time = Column(DateTime)
-    league = Column(String)
-    bet_start_time = Column(DateTime)  # Betting start time
-    bet_end_time = Column(DateTime)  # Betting end time
+    sport = Column(Enum(SportType), nullable=False)  # Sport Type (Basketball, Football, etc.)
+    league = Column(String, nullable=False)
+    team1 = Column(String, nullable=False)
+    team2 = Column(String, nullable=False)
+    match_time = Column(DateTime, nullable=False)
+    bet_end_time = Column(DateTime)
+
+    status = Column(String, default="scheduled")  # Stores match status
+    result = Column(JSON, default={})  # Stores quarter-wise scores, total points, and winner dynamically
+    total_points = Column(Integer, default=0)  # Stores sum of all quarters
 
     events = relationship("Event", back_populates="match", cascade="all, delete-orphan")
 
@@ -85,17 +103,14 @@ class Match(Base):
 
 class Share(Base):
     __tablename__ = "shares"
-
+    
     id = Column(Integer, primary_key=True, index=True)
-    user_id = Column(String, ForeignKey("users.id"))
+    user_id = Column(String, ForeignKey("users.id"), nullable=False)
     event_id = Column(Integer, ForeignKey("events.id"), nullable=False)
-    amount = Column(Float)  # Number of shares
-    bet_type = Column(String)  # "buy" or "sell"
-    outcome = Column(String)  # "yes" or "no"
-    share_price = Column(
-        Float, nullable=False
-    )  # Price at which shares were bought/sold
-    limit_price = Column(Float, nullable=True)  # Limit price for the trade
+    amount = Column(Float, nullable=False)  # Number of shares
+    bet_type = Column(String, nullable=False)  # "buy" or "sell"
+    share_price = Column(Float, nullable=False)  # Price at which shares were bought/sold
+    limit_price = Column(Float, nullable=True)
     created_at = Column(DateTime, server_default=func.now(), nullable=False)
 
     user = relationship("User", back_populates="shares")

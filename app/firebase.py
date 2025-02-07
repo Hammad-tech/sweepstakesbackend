@@ -1,6 +1,6 @@
 # app/firebase.py
 import firebase_admin
-from firebase_admin import credentials, auth
+from firebase_admin import credentials
 
 
 def initialize_firebase():

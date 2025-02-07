@@ -1,8 +1,8 @@
 from pydantic import BaseModel, EmailStr, constr, root_validator
-from typing import List, Optional
+from typing import List, Optional, Dict
 from datetime import datetime
 from enum import Enum as PyEnum
-from .models import UserRole, RemarkType
+from .models import UserRole, RemarkType, EventType
 
 
 class MatchCreate(BaseModel):
@@ -10,20 +10,6 @@ class MatchCreate(BaseModel):
     away_team: str
     match_time: str
     variations: Optional[List[dict]] = []  # Optional JSON field for variations
-
-
-# Define a Pydantic model for the response
-class MatchResponse(BaseModel):
-    id: int
-    home_team: str
-    away_team: str
-    match_time: str
-    total_yes_bets: int
-    total_no_bets: int
-    variations: List[dict] = []
-
-    class Config:
-        orm_mode = True
 
 
 # Pydantic model for creating a new user
@@ -48,20 +34,40 @@ class UserOut(BaseModel):
         orm_mode = True  # Enable ORM mode
         arbitrary_types_allowed = True
 
+class MatchResponse(BaseModel):
+    id: int
+    team1: str
+    team2: str
+    league: str
+    sport: str
+    match_time: datetime  # Updated to string
+    bet_end_time: Optional[datetime] = None
 
+    class Config:
+        orm_mode = True
+        from_attributes=True
+        json_encoders = {
+            datetime: lambda dt: dt.isoformat()  # Ensures datetime fields are serialized as strings
+        }
 class EventResponse(BaseModel):
     id: int
     match_id: int
-    match_time: datetime  # Include match_time from the related Match table
+    heading: str
     question: str
-    total_yes_bets: int
-    total_no_bets: int
-    yes_percentage: int
-    variations: List[dict]  # You can adjust this if variations is a more complex type
+    type: str  # Ensure this aligns with your `EventType` in DB
+    threshold: Optional[float] = None  # Some events may not have thresholds
+    buy_sell_index: float
+    buy_price: float
+    sell_price: float
+    variations: List[dict]  # List of buy/sell price changes over time
+    match_time: datetime
+    sport: str
+    league: str
+    team1: str
+    team2: str
 
     class Config:
-        orm_mode = True  # This allows FastAPI to automatically convert SQLAlchemy models to Pydantic models
-
+        orm_mode = True
 
 # CreateRemark model that is used to validate the incoming data
 class CreateRemark(BaseModel):
@@ -130,7 +136,6 @@ class RegisterUser(BaseModel):
 class BuyShareRequest(BaseModel):
     user_id: str
     event_id: int
-    outcome: str  # "yes" or "no"
     bet_type: str  # "buy" or "sell"
     shareCount: int
     share_price: float  # Current price of the share
@@ -140,7 +145,6 @@ class BuyShareRequest(BaseModel):
 class SellShareRequest(BaseModel):
     user_id: str
     event_id: int
-    outcome: str  # "yes" or "no"
     bet_type: str  # "buy" or "sell"
     shareCount: int
     share_price: float  # Current price of the share
@@ -196,3 +200,13 @@ class UserProfileEdit(BaseModel):
     add_balance: Optional[float] = None
     subtract_balance: Optional[float] = None
     ban: Optional[bool] = None
+
+
+class EventDetailResponse(BaseModel):
+    question: str
+    team1: str
+    team2: str
+    bet_end_time: str
+    total_bets: int
+    resolved: bool
+    winner: str

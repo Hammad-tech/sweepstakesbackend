@@ -13,9 +13,10 @@ from sqlalchemy.orm import Session
 import firebase_admin
 from firebase_admin import auth
 
-# Pydantic Models
-from typing import List
+from datetime import datetime
 
+# Pydantic Models
+from typing import List, Dict
 
 # Custom Imports (e.g., utilities, helper functions)
 from .db_config import (
@@ -32,7 +33,6 @@ from .models import (
     RemarkType,
 )  # Assuming these are your SQLAlchemy models
 from .schemas import (
-    MatchCreate,
     UserOut,
     EventResponse,
     CreateRemark,
@@ -42,11 +42,15 @@ from .schemas import (
     UserProfile,
     UserProfileEdit,
     ChangePasswordRequest,
+    EventDetailResponse,
+    MatchResponse
 )  # Assuming these are your Pydantic schemas
-from .helper import scrape_and_store_matches
-
+from .helper import fetch_and_store_matches
 from .config import add_cors_middleware, start_scheduler
 from .firebase import initialize_firebase
+from collections import defaultdict
+from sqlalchemy.orm.attributes import flag_modified
+
 
 spread_value = 2
 # Create the tables
@@ -62,150 +66,170 @@ async def startup_event():
     start_scheduler()  # Start scheduling tasks (like scraping)
 
 
-@app.get("/api/scrape_and_store_matches")
-def scrape_and_store_matches_route(db: Session = Depends(get_db)):
-    return scrape_and_store_matches(db)
-
-
-@app.post("/create_test_match")
-def create_match(match: MatchCreate, db: Session = Depends(get_db)):
-    # Create a new match object with the received data
-    db_match = Match(
-        home_team=match.home_team,
-        away_team=match.away_team,
-        match_time=match.match_time,
-        total_yes_bets=0,  # Default to 0 for a new match
-        total_no_bets=0,  # Default to 0 for a new match
-    )
-
-    # Add the match to the session and commit
-    db.add(db_match)
-    db.commit()
-    db.refresh(
-        db_match
-    )  # Refresh to get the ID and other auto-generated fields from the database
-
-    return {"message": "Test match created successfully", "match": db_match.as_dict()}
+@app.get("/api/fetch_and_store_matches")
+def fetch_and_store_matches_route(db: Session = Depends(get_db)):
+    return fetch_and_store_matches(db)
 
 
 # API to retrieve all matches
-@app.get("/matches/")
+@app.get("/matches", response_model=Dict[str, List[MatchResponse]])
 def get_matches(db: Session = Depends(get_db)):
     matches = db.query(Match).all()
-    matches_list = [match.as_dict() for match in matches]
-    return JSONResponse(content=matches_list)
+    
+    grouped_matches = {}
+    for match in matches:
+        sport = match.sport
+        match_data = MatchResponse.from_orm(match)
+        
+        if sport not in grouped_matches:
+            grouped_matches[sport] = []
+            
+        
+        grouped_matches[sport].append(match_data.dict())
+
+    return grouped_matches
+
+
+@app.get("/matches/basketball", response_model=Dict[str, List[MatchResponse]])
+def get_basketball_matches(db: Session = Depends(get_db)):
+    """
+    Get all upcoming basketball matches grouped by league.
+    """
+    current_time = datetime.utcnow()
+
+    # Fetch all basketball matches with match_time in the future
+    basketball_matches = (
+        db.query(Match)
+        .filter(Match.sport == "basketball", Match.bet_end_time > current_time)
+        .order_by(Match.league, Match.match_time)
+        .all()
+    )
+
+    if not basketball_matches:
+        raise HTTPException(
+            status_code=404,
+            detail="No upcoming basketball matches found"
+        )
+
+    # Group matches by league
+    matches_by_league = {}
+    for match in basketball_matches:
+        league = match.league
+        match_data = MatchResponse(
+            id=match.id,
+            sport=match.sport,
+            league=match.league,
+            team1=match.team1,
+            team2=match.team2,
+            match_time=match.match_time.isoformat(),
+            bet_end_time=match.bet_end_time
+        )
+        if league not in matches_by_league:
+            matches_by_league[league] = []
+        matches_by_league[league].append(match_data)
+
+    return matches_by_league
 
 
 @app.get("/event/{event_id}")
 def get_event_by_id(event_id: int, db: Session = Depends(get_db)):
-    # Query the database for the event with the given ID
+
+    """
+    Get detailed information for a specific event by its ID.
+    """
+    # Fetch the event and associated match
     db_event = db.query(Event).filter(Event.id == event_id).first()
-
     if not db_event:
-        raise HTTPException(
-            status_code=404, detail=f"Event with ID {event_id} not found"
-        )
+        raise HTTPException(status_code=404, detail=f"Event with ID {event_id} not found")
 
-    # Query the associated match for this event
     db_match = db.query(Match).filter(Match.id == db_event.match_id).first()
-
-    # If no match is found, raise an error
     if not db_match:
-        raise HTTPException(
-            status_code=404, detail=f"Match for event ID {event_id} not found"
-        )
-    # Initialize variables to calculate percentages
-    total_yes_bets = db_event.total_yes_bets
-    total_no_bets = db_event.total_no_bets
+        raise HTTPException(status_code=404, detail=f"Match for event ID {event_id} not found")
 
-    # Calculate yes/no percentages based on the current state
-    if total_yes_bets + total_no_bets > 0:
-        yes_percentage = (total_yes_bets / (total_yes_bets + total_no_bets)) * 100
-        no_percentage = 100 - yes_percentage
-    else:
-        yes_percentage = 50
-        no_percentage = 50
+    # Ensure variations' timestamp is converted to datetime before formatting
+    variations_with_iso_timestamps = []
+    for variation in db_event.variations:
+        try:
+            # Convert timestamp to datetime if it's a string
+            timestamp = variation["timestamp"]
+            if isinstance(timestamp, str):
+                timestamp = datetime.fromisoformat(timestamp)  # Convert to datetime
+            
+            variations_with_iso_timestamps.append({
+                "timestamp": timestamp.isoformat(),
+                "buy_price": variation["buy_price"],
+                "sell_price": variation["sell_price"]
+            })
+        except Exception as e:
+            print(f"Error parsing timestamp: {e}")  # Debugging purpose, remove in production
 
-    if yes_percentage == 0:
-        yes_percentage = 1
-        no_percentage = 99
-
-    elif no_percentage == 0:
-        yes_percentage = 99
-        no_percentage = 1
-
-    # Create a new variation entry with the current timestamp and percentages
-    new_variation = {
-        "timestamp": str(func.now()),  # Current time
-        "yes": round(yes_percentage, 2),
-        "no": round(no_percentage, 2),
-    }
-
-    # Append the new variation to the event's variations list
-    db_event.variations.append(new_variation)
-
-    # Commit the changes to the database
-    db.commit()
-
-    # Return the event details along with the match and variations
+    # Build response (NO MODIFICATIONS!)
     response_data = {
         "id": db_event.id,
         "match_id": db_event.match_id,
         "question": db_event.question,
-        "total_yes_bets": total_yes_bets + spread_value,
-        "total_no_bets": total_no_bets + spread_value,
-        "variations": db_event.variations,
+        "type": db_event.type,
+        "threshold": db_event.threshold,
+        "buy_sell_index": db_event.buy_sell_index,
+        "buy_price": round(db_event.buy_price, 2),
+        "sell_price": round(db_event.sell_price, 2),
+        "variations": variations_with_iso_timestamps,  # Graph tracking
         "match": {
             "id": db_match.id,
             "team1": db_match.team1,
             "team2": db_match.team2,
-            "match_time": str(db_match.match_time),
+            "match_time": db_match.match_time.isoformat(),
             "league": db_match.league,
-            "bet_start_time": str(db_match.bet_start_time),
-            "bet_end_time": str(db_match.bet_end_time),
         },
     }
 
     return JSONResponse(content=response_data)
 
 
-@app.get(
-    "/events", response_model=List[EventResponse]
-)  # Return a list of EventResponse objects
-def get_events(db: Session = Depends(get_db)):
+@app.get("/events/{match_id}", response_model=Dict[str, List[EventResponse]])
+def get_events_by_match_id(match_id: int, db: Session = Depends(get_db)):
+    """
+    Get all events for a specific match ID, grouped by heading.
+    """
+    # Fetch events associated with the given match ID
+    events = db.query(Event).filter(Event.match_id == match_id).all()
 
-    current_time = func.now()
+    if not events:
+        raise HTTPException(
+            status_code=404,
+            detail=f"No events found for match ID {match_id}"
+        )
 
-    # Query the matches that have a bet_end_time greater than the current time
-    matches = db.query(Match).filter(Match.bet_end_time > current_time).all()
-    # If no matches, return an empty list instead of raising an error
-    events = []
-    for match in matches:
-        # Get all events for this match
-        match_events = db.query(Event).filter(Event.match_id == match.id).all()
+    grouped_events = defaultdict(list)
 
-        # Add the events to the list, including the match_time from the related Match table
-        for event in match_events:
-            event_data = event.as_dict()
-            event_data["match_time"] = (
-                match.match_time
-            )  # Include match_time from the Match table
-            # Initialize variables to calculate percentages
-            total_yes_bets = event.total_yes_bets
-            total_no_bets = event.total_no_bets
+    for event in events:
+        match = event.match
+        if not match:
+            continue  # Skip events with no associated match
 
-            # Calculate yes/no percentages based on the current state
-            if total_yes_bets + total_no_bets > 0:
-                yes_percentage = (
-                    total_yes_bets / (total_yes_bets + total_no_bets)
-                ) * 100
-            else:
-                yes_percentage = 50
+        # Construct the EventResponse object
+        event_data = EventResponse(
+            id=event.id,
+            match_id=event.match_id,
+            question=event.question,
+            type=event.type or "N/A",
+            heading=event.heading,
+            threshold=event.threshold or 0.0,
+            buy_sell_index=event.buy_sell_index,
+            buy_price=round(event.buy_price, 2),
+            sell_price=round(event.sell_price, 2),
+            variations=event.variations,
+            match_time=match.match_time.isoformat(),
+            sport=match.sport,
+            league=match.league,
+            team1=match.team1,
+            team2=match.team2,
+        )
 
-            event_data["yes_percentage"] = yes_percentage
-            events.append(event_data)
+        # Group by heading
+        grouped_events[event.heading].append(event_data)
 
-    return events  # FastAPI will automatically serialize the events using the EventResponse Pydantic model
+    return grouped_events
 
 
 @app.post("/modifyBalance", response_model=dict)
@@ -242,6 +266,7 @@ def modify_balance(create_remark: CreateRemark, db: Session = Depends(get_db)):
         "user_id": create_remark.user_id,
         "amount": create_remark.amount,
     }
+
 
 
 @app.post("/ban_unban")
@@ -393,254 +418,179 @@ async def login(token: HTTPAuthorizationCredentials = Depends(security)):
 
 @app.post("/api/market/buy-share")
 async def buy_share(request: BuyShareRequest, db: Session = Depends(get_db)):
-    # Fetch user
+    """
+    Execute a buy trade for an event at any price, offsetting any existing sell positions first.
+    """
     user = db.query(User).filter(User.id == request.user_id).first()
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
 
-    # Validate bet_type and outcome
-    if request.bet_type not in ["buy", "sell"]:
-        raise HTTPException(
-            status_code=400, detail="Invalid bet type. Must be 'buy' or 'sell'."
-        )
-    if request.outcome not in ["yes", "no"]:
-        raise HTTPException(
-            status_code=400, detail="Invalid outcome. Must be 'yes' or 'no'."
-        )
-
-    # Fetch event
     event = db.query(Event).filter(Event.id == request.event_id).first()
     if not event:
         raise HTTPException(status_code=404, detail="Event not found")
 
-    # Fetch existing shares for the event
-    existing_shares = (
-        db.query(Share)
-        .filter(Share.user_id == user.id, Share.event_id == request.event_id)
-        .all()
-    )
+    existing_sell_shares = db.query(Share).filter(
+        Share.user_id == user.id, 
+        Share.event_id == request.event_id, 
+        Share.bet_type == "sell"
+    ).all()
 
-    # Check for conflicting outcomes
-    for share in existing_shares:
-        if share.outcome != request.outcome:
-            raise HTTPException(
-                status_code=400,
-                detail=f"Conflicting outcome detected. Existing position is {share.outcome}.",
-            )
-
-    # Resolve opposing positions (e.g., sell existing buy positions)
-    opposing_shares = [
-        share
-        for share in existing_shares
-        if share.bet_type != request.bet_type and share.amount > 0
-    ]
     remaining_shares = request.shareCount
-    total_profit_or_loss = 0  # Track profit/loss for opposing trades
+    total_profit_or_loss = 0  
+    variations = []  
 
-    for share in opposing_shares:
-        trade_price = (
-            request.share_price
-        )  # Use the current share price for profit/loss calculation
+    # 🛠 **Offset Sell Positions First**
+    for share in existing_sell_shares:
         if share.amount >= remaining_shares:
-            # Close partially or fully opposing position
-            trade_amount = remaining_shares
-            total_profit_or_loss += trade_amount * (
-                request.share_price / 100 - share.share_price / 100
-            )
+            total_profit_or_loss += remaining_shares * (share.share_price / 100 - request.share_price / 100)
             share.amount -= remaining_shares
             remaining_shares = 0
             db.add(share)
             break
         else:
-            # Fully close the opposing position
-            trade_amount = share.amount
-            total_profit_or_loss += trade_amount * (
-                request.share_price / 100 - share.share_price / 100
-            )
-            remaining_shares -= trade_amount
+            total_profit_or_loss += share.amount * (share.share_price / 100 - request.share_price / 100)
+            remaining_shares -= share.amount
             db.delete(share)
 
-    # Update user's balance based on profit/loss from opposing trades
+    if total_profit_or_loss != 0:
+        variations.append({
+            "timestamp": datetime.now().isoformat(),  
+            "buy_price": round(event.buy_price, 2),
+            "sell_price": round(event.sell_price, 2),
+            "note": "Offset trade executed"
+        })
+
     user.sweeps_points += total_profit_or_loss
 
-    # Handle remaining shares (opening or updating position)
     if remaining_shares > 0:
-        existing_position = next(
-            (
-                share
-                for share in existing_shares
-                if share.bet_type == request.bet_type
-                and share.outcome == request.outcome
-            ),
-            None,
+        total_cost = (request.share_price / 100) * remaining_shares
+        if user.sweeps_points < total_cost:
+            raise HTTPException(status_code=400, detail="Insufficient balance for the trade.")
+        user.sweeps_points -= total_cost
+
+        new_share = Share(
+            user_id=user.id,
+            event_id=request.event_id,
+            amount=remaining_shares,
+            bet_type="buy",
+            share_price=request.share_price,
+            limit_price=request.limit_price,
         )
+        db.add(new_share)
 
-        if existing_position:
-            # Update the existing position
-            existing_position.amount += remaining_shares
-            # Update the limit price if provided
-            if request.limit_price:
-                existing_position.limit_price = request.limit_price
-            db.add(existing_position)
-        else:
-            # Create a new position
-            new_share = Share(
-                user_id=user.id,
-                event_id=request.event_id,
-                amount=remaining_shares,
-                bet_type=request.bet_type,
-                outcome=request.outcome,
-                share_price=request.share_price,  # Store the current share price
-                limit_price=request.limit_price,  # Save limit price if provided
-            )
-            db.add(new_share)
+        spread_factor = 2
+        max_buy_price = 100
+        event.buy_price = min(event.buy_price + (remaining_shares / 10), max_buy_price)
+        event.sell_price = max(event.buy_price - spread_factor, 51)
 
-        # Deduct cost from user's balance for new buy positions
-        if request.bet_type == "buy":
-            total_cost = (request.share_price / 100) * remaining_shares
-            if user.sweeps_points < total_cost:
-                raise HTTPException(
-                    status_code=400, detail="Insufficient balance for the trade."
-                )
-            user.sweeps_points -= total_cost
+        variations.append({
+            "timestamp": datetime.now().isoformat(),  
+            "buy_price": round(event.buy_price, 2),
+            "sell_price": round(event.sell_price, 2),
+            "note": "New buy order executed"
+        })
 
-    # Update event totals
-    if request.outcome == "yes":
-        if request.bet_type == "buy":
-            event.total_yes_bets += request.shareCount
-        else:
-            event.total_yes_bets -= request.shareCount
-    elif request.outcome == "no":
-        if request.bet_type == "buy":
-            event.total_no_bets += request.shareCount
-        else:
-            event.total_no_bets -= request.shareCount
-
-    # Commit transaction
+    event.variations.extend(variations)  
+    flag_modified(event, "variations")
+    db.add(event)
     db.commit()
+    
     return {
-        "message": "Trade executed successfully",
+        "message": "Buy trade executed successfully",
         "profit_or_loss": round(total_profit_or_loss, 2),
+        "buy_price": round(event.buy_price, 2),
+        "sell_price": round(event.sell_price, 2),
     }
 
 
 @app.post("/api/market/sell-share")
 async def sell_share(request: SellShareRequest, db: Session = Depends(get_db)):
-    # Fetch user
+    """
+    Execute a sell trade for an event at any price, offsetting any existing buy positions first.
+    """
     user = db.query(User).filter(User.id == request.user_id).first()
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
 
-    # Validate bet_type and outcome
-    if request.bet_type != "sell":
-        raise HTTPException(
-            status_code=400, detail="Invalid bet type for selling. Must be 'sell'."
-        )
-    if request.outcome not in ["yes", "no"]:
-        raise HTTPException(
-            status_code=400, detail="Invalid outcome. Must be 'yes' or 'no'."
-        )
-
-    # Fetch event
     event = db.query(Event).filter(Event.id == request.event_id).first()
     if not event:
         raise HTTPException(status_code=404, detail="Event not found")
 
-    # Fetch existing shares for the event
-    existing_shares = (
-        db.query(Share)
-        .filter(Share.user_id == user.id, Share.event_id == request.event_id)
-        .all()
-    )
+    existing_buy_shares = db.query(Share).filter(
+        Share.user_id == user.id, 
+        Share.event_id == request.event_id, 
+        Share.bet_type == "buy"
+    ).all()
 
-    # Check for conflicting outcomes
-    for share in existing_shares:
-        if share.outcome != request.outcome:
-            raise HTTPException(
-                status_code=400,
-                detail=f"Conflicting outcome detected. Existing position is {share.outcome}.",
-            )
-
-    # Resolve opposing positions (e.g., buy existing sell positions)
-    opposing_shares = [
-        share
-        for share in existing_shares
-        if share.bet_type == "buy" and share.amount > 0
-    ]
     remaining_shares = request.shareCount
-    total_profit_or_loss = 0  # Track profit/loss for opposing trades
+    total_profit_or_loss = 0  
+    variations = []  
 
-    for share in opposing_shares:
-        trade_price = (
-            request.share_price
-        )  # Use the current share price for profit/loss calculation
+    # 🛠 **Offset Buy Positions First**
+    for share in existing_buy_shares:
         if share.amount >= remaining_shares:
-            # Close partially or fully opposing position
-            trade_amount = remaining_shares
-            total_profit_or_loss += trade_amount * (
-                share.share_price / 100 - request.share_price / 100
-            )
+            total_profit_or_loss += remaining_shares * (request.share_price / 100 - share.share_price / 100)
             share.amount -= remaining_shares
             remaining_shares = 0
             db.add(share)
             break
         else:
-            # Fully close the opposing position
-            trade_amount = share.amount
-            total_profit_or_loss += trade_amount * (
-                share.share_price / 100 - request.share_price / 100
-            )
-            remaining_shares -= trade_amount
+            total_profit_or_loss += share.amount * (request.share_price / 100 - share.share_price / 100)
+            remaining_shares -= share.amount
             db.delete(share)
 
-    # Update user's balance based on profit/loss from opposing trades
+    if total_profit_or_loss != 0:
+        variations.append({
+            "timestamp": datetime.now().isoformat(),  
+            "buy_price": round(event.buy_price, 2),
+            "sell_price": round(event.sell_price, 2),
+            "note": "Offset trade executed"
+        })
+
     user.sweeps_points += total_profit_or_loss
 
-    # Handle remaining shares (opening or updating position)
     if remaining_shares > 0:
-        existing_position = next(
-            (
-                share
-                for share in existing_shares
-                if share.bet_type == "sell" and share.outcome == request.outcome
-            ),
-            None,
+        total_cost = (request.share_price / 100) * remaining_shares
+        if user.sweeps_points < total_cost:
+            raise HTTPException(status_code=400, detail="Insufficient balance for the trade.")
+        user.sweeps_points -= total_cost
+
+        new_share = Share(
+            user_id=user.id,
+            event_id=request.event_id,
+            amount=remaining_shares,
+            bet_type="sell",
+            share_price=request.share_price,
+            limit_price=request.limit_price,
         )
+        db.add(new_share)
 
-        if existing_position:
-            # Update the existing position
-            existing_position.amount += remaining_shares
-            # Update the limit price if provided
-            if request.limit_price:
-                existing_position.limit_price = request.limit_price
-            db.add(existing_position)
-        else:
-            # Create a new position
-            new_share = Share(
-                user_id=user.id,
-                event_id=request.event_id,
-                amount=remaining_shares,
-                bet_type="sell",
-                outcome=request.outcome,
-                share_price=request.share_price,  # Store the current share price
-                limit_price=request.limit_price,  # Save limit price if provided
-            )
-            db.add(new_share)
+        spread_factor = 2
+        event.buy_price = max(event.buy_price - (remaining_shares / 10), 51)
+        event.sell_price = event.buy_price - spread_factor
 
-    # Update event totals
-    if request.outcome == "yes":
-        event.total_yes_bets -= request.shareCount
-    elif request.outcome == "no":
-        event.total_no_bets -= request.shareCount
+        variations.append({
+            "timestamp": datetime.now().isoformat(),
+            "buy_price": round(event.buy_price, 2),
+            "sell_price": round(event.sell_price, 2),
+            "note": "New sell order executed"
+        })
 
-    # Commit transaction
+    event.variations.extend(variations)  
+    flag_modified(event, "variations")
+
+    db.add(event)
     db.commit()
+
     return {
-        "message": "Trade executed successfully",
+        "message": "Sell trade executed successfully",
         "profit_or_loss": round(total_profit_or_loss, 2),
+        "buy_price": round(event.buy_price, 2),
+        "sell_price": round(event.sell_price, 2),
     }
 
 
+#useless prolly
 @app.get("/api/market/share-price")
 async def get_share_price(eventId: int, type: str, db: Session = Depends(get_db)):
     # Validate the type parameter
@@ -919,5 +869,105 @@ async def google_signup(
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.get("/api/ai-bets", response_model=list)
+def get_ai_bets(db: Session = Depends(get_db)):
+    """
+    API to fetch bets placed by the AI bot.
+    Returns a list of bets with team names, league, bet type, outcome, number of shares, and bet time.
+    """
+
+    bot_user_id = "8AAjT02uf3XwQuHaebR4bTacbw92"  # AI bot user ID
+    
+    # Query to fetch all bets made by the AI bot
+    ai_bets = (
+        db.query(Share)
+        .join(Event, Share.event_id == Event.id)
+        .join(Match, Event.match_id == Match.id)
+        .filter(Share.user_id == bot_user_id)
+        .all()
+    )
+
+    if not ai_bets:
+        raise HTTPException(status_code=404, detail="No bets found for the AI bot.")
+
+    # Prepare response
+    response = []
+    for bet in ai_bets:
+        response.append({
+            "team1": bet.event.match.team1,
+            "team2": bet.event.match.team2,
+            "league": bet.event.match.league,
+            "bet_type": bet.bet_type,
+            "number_of_shares": bet.amount,
+            "bet_time": bet.created_at.strftime("%Y-%m-%d %H:%M:%S")
+        })
+
+    return response
+
+
+@app.get("/events/results", response_model=List[EventDetailResponse])
+def get_event_details(db: Session = Depends(get_db)):
+    # Query all events and their associated matches
+    events = (
+        db.query(Event)
+        .join(Match, Match.id == Event.match_id)
+        .outerjoin(Share, Share.event_id == Event.id)
+        .all()
+    )
+    
+    if not events:
+        raise HTTPException(status_code=404, detail="No events found.")
+
+    event_details = []
+    for event in events:
+        total_bets = db.query(Share).filter(Share.event_id == event.id).count()
+        match = db.query(Match).filter(Match.id == event.match_id).first()
+        
+        if not match:
+            continue  # Skip if match information is missing
+
+        event_details.append({
+            "question": event.question,
+            "team1": match.team1,
+            "team2": match.team2,
+            "bet_end_time": str(match.bet_end_time),
+            "total_bets": total_bets,
+            "resolved": event.resolved,
+            "winner": event.winner,
+        })
+
+    return event_details
+
+
+@app.post("/api/add_dummy_ai_user", response_model=dict)
+def add_dummy_ai_user(db: Session = Depends(get_db)):
+    """
+    API to add a dummy AI user for betting purposes.
+    If the user already exists, return the existing user.
+    """
+    bot_user_id = "8AAjT02uf3XwQuHaebR4bTacbw92"  # Static ID for AI bot user
+
+    # Check if AI user already exists
+    existing_user = db.query(User).filter(User.id == bot_user_id).first()
+    if existing_user:
+        return {"message": "AI user already exists", "user_id": bot_user_id}
+
+    # Create new AI user
+    ai_user = User(
+        id=bot_user_id,
+        name="AI_Betting_Bot",
+        email="ai_betting@dummy.com",
+        sweeps_points=100000.0,  # Give some initial balance for betting
+    )
+
+    db.add(ai_user)
+    db.commit()
+    db.refresh(ai_user)
+
+    return {"message": "AI user created successfully", "user_id": ai_user.id}
+
+
+
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=8000)
+
