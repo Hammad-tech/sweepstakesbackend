@@ -144,13 +144,13 @@ def start_scheduler():
 
     # Scraping job
     scheduler.add_job(
-        lambda: run_fetch_and_store_matches(), "cron", hour=12, minute=10
+        run_fetch_and_store_matches, IntervalTrigger(minutes=1), id="Fetch results", replace_existing=True
     )
 
     # Result calculation job
     scheduler.add_job(
         process_results_job,
-        IntervalTrigger(minutes=2),
+        IntervalTrigger(minutes=10),
         id="result_scheduler",
         replace_existing=True,
     )

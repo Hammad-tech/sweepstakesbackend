@@ -3,6 +3,7 @@ venv/
 .idea/
 
 # Firebase keys
+
 firebase.json
 
 # Pycache
