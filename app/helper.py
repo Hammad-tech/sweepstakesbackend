@@ -437,6 +437,8 @@ def fetch_and_store_matches(db: Session):
         response = requests.get(API_URL, headers=API_HEADERS, params=payload)
         if response.status_code == 200:
             match_data = response.json().get("response", [])
+            print("****************",match_data)
+            import pdb;pdb.set_trace()
             for match in match_data:
                 existing_match = db.query(Match).filter_by(id=match["id"]).first()
                 if not existing_match:
